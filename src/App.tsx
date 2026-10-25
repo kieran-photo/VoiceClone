@@ -4,13 +4,11 @@ import type { Clip, SplitStemsResult } from "./audioBackend";
 import {
   Mic,
   Upload,
-  Play,
   Pause,
   RefreshCw,
   Music,
   Sliders,
   Sparkles,
-  Volume2,
   Check,
   FileText,
   Headphones,
@@ -22,96 +20,8 @@ import {
 } from "lucide-react";
 
 // 100% In-Browser WAV Audio Encoder (Pure TypeScript, Zero External Dependencies)
-function audioBufferToWav(buffer: AudioBuffer): Blob {
-  const numChannels = buffer.numberOfChannels;
-  const sampleRate = buffer.sampleRate;
-  const format = 1; // 1 = Uncompressed PCM
-  const bitDepth = 16;
-  const bytesPerSample = bitDepth / 8;
-  const blockAlign = numChannels * bytesPerSample;
-
-  const length = buffer.length * blockAlign;
-  const headerByteLength = 44;
-  const totalByteLength = headerByteLength + length;
-  const arrayBuffer = new ArrayBuffer(totalByteLength);
-  const view = new DataView(arrayBuffer);
-
-  const writeString = (offset: number, str: string) => {
-    for (let i = 0; i < str.length; i++) {
-      view.setUint8(offset + i, str.charCodeAt(i));
-    }
-  };
-
-  // RIFF Chunk Descriptor
-  writeString(0, "RIFF");
-  view.setUint32(4, 36 + length, true);
-  writeString(8, "WAVE");
-
-  // fmt sub-chunk
-  writeString(12, "fmt ");
-  view.setUint32(16, 16, true); // SubChunk1Size (16 for PCM)
-  view.setUint16(20, format, true);
-  view.setUint16(22, numChannels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * blockAlign, true); // ByteRate
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, bitDepth, true);
-
-  // data sub-chunk
-  writeString(36, "data");
-  view.setUint32(40, length, true);
-
-  const channels: Float32Array[] = [];
-  for (let c = 0; c < numChannels; c++) {
-    channels.push(buffer.getChannelData(c));
-  }
-
-  let offset = 44;
-  for (let i = 0; i < buffer.length; i++) {
-    for (let c = 0; c < numChannels; c++) {
-      let sample = channels[c][i];
-      // Hard clamp between -1.0 and 1.0 to prevent overflow
-      sample = Math.max(-1, Math.min(1, sample));
-      const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-      view.setInt16(offset, intSample, true);
-      offset += 2;
-    }
-  }
-
-  return new Blob([arrayBuffer], { type: "audio/wav" });
-}
 
 // In-Browser Procedural Electronic Lyrics Generator
-function generateLocalLyrics(genreName: string, vocaloidName?: string): string {
-  const topics = [
-    [
-      "Electric signals pulse across the midnight floor",
-      "Feel the sub-bass tearing through the speaker cone",
-      "Neon lasers lighting up the infinite sky",
-      "Lost inside the frequency we call our home"
-    ],
-    [
-      "Synthetic heartbeats synching to the techno groove",
-      "Formants shifting as the tempo begins to rise",
-      "Step into the cypher watch the rhythm move",
-      "Digital echoes burning through the dark skies"
-    ],
-    [
-      "One hundred seventy-four beats taking control",
-      "Rolling breakbeats echoing in deep space",
-      "Bassweight pressure vibrating through the floor",
-      "Pure energy moving in an endless chase"
-    ],
-    [
-      "Glitch in the matrix dropping on the four-by-four",
-      "Synthetic vocals singing till the morning comes",
-      "Synthesizer waves crashing on the club shore",
-      "Ride the heavy thunder of the electronic drums"
-    ]
-  ];
-  const chosen = topics[Math.floor(Math.random() * topics.length)];
-  return chosen.join("\n");
-}
 
 interface GenreCategory {
   category: string;
@@ -1601,231 +1511,6 @@ export default function App() {
   };
 
   // Synthesize audio stems using local OfflineAudioContext
-  const synthesizeStemAudio = async (
-    targetStem: "all" | "vocals" | "drums" | "bass" | "other"
-  ): Promise<Blob> => {
-    const sampleRate = 44100;
-    const bpm = activeSubgenre.bpm || 128;
-    const beatDuration = 60 / bpm;
-    const totalBars = 4;
-    const beatsPerBar = 4;
-    const totalBeats = totalBars * beatsPerBar;
-    const duration = totalBeats * beatDuration;
-
-    const offlineCtx = new OfflineAudioContext(2, Math.ceil(duration * sampleRate), sampleRate);
-    const now = 0;
-
-    // 1. Synthesize Vocals Stem
-    if (targetStem === "all" || targetStem === "vocals") {
-      const targetF0 = voiceProfile ? voiceProfile.f0Hz : 160;
-      const formants = voiceProfile?.formants || { f1: 520, f2: 1650, f3: 2600 };
-      const lines = lyrics.split("\n").filter((l) => l.trim().length > 0);
-      const noteCount = Math.min(16, Math.max(8, lines.length * 4));
-
-      // Scale notes (Pentatonic / Minor)
-      const scaleIntervals = [0, 3, 5, 7, 10, 12, 15, 17];
-
-      for (let i = 0; i < noteCount; i++) {
-        const noteStart = now + (i * (duration / noteCount));
-        const noteDur = (duration / noteCount) * 0.75;
-        const interval = scaleIntervals[i % scaleIntervals.length];
-        const noteFreq = targetF0 * Math.pow(2, interval / 12);
-
-        const osc = offlineCtx.createOscillator();
-        osc.type = voiceProfile?.isVocaloid ? "sawtooth" : "triangle";
-        osc.frequency.setValueAtTime(noteFreq, noteStart);
-
-        // Vocal vibrato
-        const vLfo = offlineCtx.createOscillator();
-        const vLfoGain = offlineCtx.createGain();
-        vLfo.frequency.setValueAtTime(6.0, noteStart);
-        vLfoGain.gain.setValueAtTime(noteFreq * 0.035, noteStart);
-        vLfo.connect(vLfoGain);
-        vLfoGain.connect(osc.frequency);
-        vLfo.start(noteStart);
-        vLfo.stop(noteStart + noteDur);
-
-        // Formant filters
-        const f1 = offlineCtx.createBiquadFilter();
-        f1.type = "bandpass";
-        f1.frequency.setValueAtTime(formants.f1, noteStart);
-        f1.Q.setValueAtTime(4.5, noteStart);
-
-        const f2 = offlineCtx.createBiquadFilter();
-        f2.type = "bandpass";
-        f2.frequency.setValueAtTime(formants.f2, noteStart);
-        f2.Q.setValueAtTime(5.5, noteStart);
-
-        const f3 = offlineCtx.createBiquadFilter();
-        f3.type = "bandpass";
-        f3.frequency.setValueAtTime(formants.f3, noteStart);
-        f3.Q.setValueAtTime(6.5, noteStart);
-
-        const fMix = offlineCtx.createGain();
-        fMix.gain.setValueAtTime(0.6, noteStart);
-
-        osc.connect(f1);
-        osc.connect(f2);
-        osc.connect(f3);
-        f1.connect(fMix);
-        f2.connect(fMix);
-        f3.connect(fMix);
-
-        // Articulation envelope
-        const env = offlineCtx.createGain();
-        env.gain.setValueAtTime(0, noteStart);
-        env.gain.linearRampToValueAtTime(0.45, noteStart + 0.04);
-        env.gain.exponentialRampToValueAtTime(0.001, noteStart + noteDur);
-
-        fMix.connect(env);
-        env.connect(offlineCtx.destination);
-
-        osc.start(noteStart);
-        osc.stop(noteStart + noteDur);
-      }
-    }
-
-    // 2. Synthesize Drums Stem (if not acapella)
-    if (!isAcapella && (targetStem === "all" || targetStem === "drums")) {
-      for (let b = 0; b < totalBeats; b++) {
-        const beatTime = now + (b * beatDuration);
-
-        // Kick Drum
-        const isKick = b % 2 === 0 || activeSubgenre.id.includes("house") || activeSubgenre.id.includes("techno");
-        if (isKick) {
-          const kickOsc = offlineCtx.createOscillator();
-          const kickGain = offlineCtx.createGain();
-          kickOsc.frequency.setValueAtTime(140, beatTime);
-          kickOsc.frequency.exponentialRampToValueAtTime(38, beatTime + 0.09);
-
-          kickGain.gain.setValueAtTime(0.85, beatTime);
-          kickGain.gain.exponentialRampToValueAtTime(0.001, beatTime + 0.25);
-
-          kickOsc.connect(kickGain);
-          kickGain.connect(offlineCtx.destination);
-
-          kickOsc.start(beatTime);
-          kickOsc.stop(beatTime + 0.26);
-        }
-
-        // Snare / Clap on beats 2 & 4
-        if (b % 4 === 1 || b % 4 === 3) {
-          const noiseBuffer = offlineCtx.createBuffer(1, Math.floor(sampleRate * 0.15), sampleRate);
-          const data = noiseBuffer.getChannelData(0);
-          for (let i = 0; i < data.length; i++) {
-            data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (sampleRate * 0.04));
-          }
-          const noise = offlineCtx.createBufferSource();
-          noise.buffer = noiseBuffer;
-
-          const sFilter = offlineCtx.createBiquadFilter();
-          sFilter.type = "highpass";
-          sFilter.frequency.setValueAtTime(800, beatTime);
-
-          const sGain = offlineCtx.createGain();
-          sGain.gain.setValueAtTime(0.5, beatTime);
-
-          noise.connect(sFilter);
-          sFilter.connect(sGain);
-          sGain.connect(offlineCtx.destination);
-
-          noise.start(beatTime);
-        }
-
-        // Hi-Hat on offbeats
-        const hatTime = beatTime + (beatDuration / 2);
-        const hatBuffer = offlineCtx.createBuffer(1, Math.floor(sampleRate * 0.05), sampleRate);
-        const hData = hatBuffer.getChannelData(0);
-        for (let i = 0; i < hData.length; i++) {
-          hData[i] = (Math.random() * 2 - 1) * Math.exp(-i / (sampleRate * 0.01));
-        }
-        const hat = offlineCtx.createBufferSource();
-        hat.buffer = hatBuffer;
-
-        const hFilter = offlineCtx.createBiquadFilter();
-        hFilter.type = "highpass";
-        hFilter.frequency.setValueAtTime(6500, hatTime);
-
-        const hGain = offlineCtx.createGain();
-        hGain.gain.setValueAtTime(0.3, hatTime);
-
-        hat.connect(hFilter);
-        hFilter.connect(hGain);
-        hGain.connect(offlineCtx.destination);
-
-        hat.start(hatTime);
-      }
-    }
-
-    // 3. Synthesize Bass Stem (if not acapella)
-    if (!isAcapella && (targetStem === "all" || targetStem === "bass")) {
-      const bassNotes = [55, 55, 65.41, 49]; // A1, A1, C2, G1
-      for (let b = 0; b < totalBeats; b++) {
-        const bTime = now + (b * beatDuration);
-        const rootFreq = bassNotes[Math.floor(b / 4) % bassNotes.length];
-
-        const bOsc = offlineCtx.createOscillator();
-        bOsc.type = "sawtooth";
-        bOsc.frequency.setValueAtTime(rootFreq, bTime);
-
-        const bFilter = offlineCtx.createBiquadFilter();
-        bFilter.type = "lowpass";
-        bFilter.frequency.setValueAtTime(450, bTime);
-        bFilter.frequency.exponentialRampToValueAtTime(120, bTime + beatDuration * 0.8);
-
-        const bGain = offlineCtx.createGain();
-        bGain.gain.setValueAtTime(0.65, bTime);
-        bGain.gain.exponentialRampToValueAtTime(0.001, bTime + beatDuration * 0.85);
-
-        bOsc.connect(bFilter);
-        bFilter.connect(bGain);
-        bGain.connect(offlineCtx.destination);
-
-        bOsc.start(bTime);
-        bOsc.stop(bTime + beatDuration);
-      }
-    }
-
-    // 4. Synthesize Synths & Instruments Stem (if not acapella)
-    if (!isAcapella && (targetStem === "all" || targetStem === "other")) {
-      const chords = [
-        [220, 261.63, 329.63], // A minor
-        [220, 261.63, 329.63],
-        [261.63, 329.63, 392.00], // C major
-        [196, 246.94, 293.66]  // G major
-      ];
-
-      for (let bar = 0; bar < totalBars; bar++) {
-        const chordTime = now + (bar * 4 * beatDuration);
-        const chordFreqs = chords[bar % chords.length];
-
-        chordFreqs.forEach((freq) => {
-          const sOsc = offlineCtx.createOscillator();
-          sOsc.type = "sawtooth";
-          sOsc.frequency.setValueAtTime(freq, chordTime);
-
-          const sFilter = offlineCtx.createBiquadFilter();
-          sFilter.type = "lowpass";
-          sFilter.frequency.setValueAtTime(1800, chordTime);
-
-          const sGain = offlineCtx.createGain();
-          sGain.gain.setValueAtTime(0, chordTime);
-          sGain.gain.linearRampToValueAtTime(0.18, chordTime + 0.2);
-          sGain.gain.exponentialRampToValueAtTime(0.001, chordTime + (4 * beatDuration) - 0.1);
-
-          sOsc.connect(sFilter);
-          sFilter.connect(sGain);
-          sGain.connect(offlineCtx.destination);
-
-          sOsc.start(chordTime);
-          sOsc.stop(chordTime + (4 * beatDuration));
-        });
-      }
-    }
-
-    const renderedBuffer = await offlineCtx.startRendering();
-    return audioBufferToWav(renderedBuffer);
-  };
 
   // Full Song Generation using Flow Music SDK
   const handleGenerateFullSong = async () => {
@@ -1923,12 +1608,12 @@ export default function App() {
       <header className="w-full max-w-6xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-slate-800/80 pb-6 mb-6">
         <div>
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-gradient-to-br from-violet-600 to-cyan-500 shadow-lg shadow-violet-500/20 text-white">
+            <div className="p-2.5 rounded-xl bg-linear-to-br from-violet-600 to-cyan-500 shadow-lg shadow-violet-500/20 text-white">
               <Zap className="w-6 h-6" />
             </div>
             <div>
               <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
-                VoiceClone <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-violet-400">Electronic Studio</span>
+                VoiceClone <span className="text-transparent bg-clip-text bg-linear-to-r from-cyan-400 to-violet-400">Electronic Studio</span>
               </h1>
               <p className="text-xs md:text-sm text-slate-400">
                 Transform any lyrics into vocals cloned from your voice sample across electronic music
@@ -2002,7 +1687,7 @@ export default function App() {
               }}
               className={`py-1.5 px-2 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${
                 voiceSourceMode === "vocaloid"
-                  ? "bg-gradient-to-r from-violet-600 to-pink-600 text-white shadow"
+                  ? "bg-linear-to-r from-violet-600 to-pink-600 text-white shadow"
                   : "text-slate-400 hover:text-slate-200"
               }`}
             >
@@ -2134,7 +1819,7 @@ export default function App() {
                       onClick={() => handleSelectVocaloid(voc)}
                       className={`p-2.5 rounded-xl cursor-pointer border transition-all flex flex-col gap-0.5 ${
                         isSelected
-                          ? "bg-gradient-to-r from-violet-950/80 to-pink-950/60 border-pink-500/80 text-white ring-1 ring-pink-500/60 shadow-lg shadow-pink-500/10"
+                          ? "bg-linear-to-r from-violet-950/80 to-pink-950/60 border-pink-500/80 text-white ring-1 ring-pink-500/60 shadow-lg shadow-pink-500/10"
                           : "bg-slate-950/60 border-slate-800/80 hover:border-slate-700 text-slate-300"
                       }`}
                     >
@@ -2188,7 +1873,7 @@ export default function App() {
           {voiceProfile && (
             <div className="p-4 rounded-xl bg-slate-950 border border-violet-500/30 flex flex-col gap-2.5 text-xs">
               <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                <span className="font-bold text-white truncate max-w-[170px]">
+                <span className="font-bold text-white truncate max-w-42.5">
                   {voiceProfile.name}
                 </span>
                 <span className="px-2 py-0.5 rounded bg-violet-950 border border-violet-800/60 text-violet-300 text-[10px]">
@@ -2272,7 +1957,7 @@ export default function App() {
               </div>
 
               {/* Subgenre Search Bar */}
-              <div className="relative min-w-[200px]">
+              <div className="relative min-w-50">
                 <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
                   type="text"
@@ -2296,7 +1981,7 @@ export default function App() {
                     }}
                     className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
                       selectedCategory === cat.category
-                        ? "bg-gradient-to-r from-violet-600 to-cyan-600 text-white shadow-md shadow-violet-600/20"
+                        ? "bg-linear-to-r from-violet-600 to-cyan-600 text-white shadow-md shadow-violet-600/20"
                         : "bg-slate-950/70 text-slate-400 hover:text-slate-200 border border-slate-800/60"
                     }`}
                   >
@@ -2443,7 +2128,7 @@ export default function App() {
               <button
                 onClick={handleGenerateFullSong}
                 disabled={isGeneratingSong || !lyrics.trim()}
-                className="w-full sm:flex-1 px-5 py-2.5 rounded-xl bg-gradient-to-r from-violet-600 via-indigo-600 to-cyan-500 hover:from-violet-500 hover:to-cyan-400 text-white font-bold text-xs shadow-lg shadow-violet-600/25 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                className="w-full sm:flex-1 px-5 py-2.5 rounded-xl bg-linear-to-r from-violet-600 via-indigo-600 to-cyan-500 hover:from-violet-500 hover:to-cyan-400 text-white font-bold text-xs shadow-lg shadow-violet-600/25 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
               >
                 {isGeneratingSong ? (
                   <>
@@ -2465,7 +2150,7 @@ export default function App() {
 
             {/* Generated Song Clip Player */}
             {generatedClip && (
-              <div className="mt-4 p-4 rounded-xl bg-gradient-to-r from-slate-950 to-slate-900 border border-cyan-500/40 flex flex-col gap-4">
+              <div className="mt-4 p-4 rounded-xl bg-linear-to-r from-slate-950 to-slate-900 border border-cyan-500/40 flex flex-col gap-4">
                 <div className="flex flex-col md:flex-row items-center gap-4">
                   {generatedClip.coverImageUrl ? (
                     <img
@@ -2561,7 +2246,7 @@ export default function App() {
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       {/* 1. Isolated Vocals (Featured Acapella) */}
-                      <div className="p-3 rounded-xl bg-gradient-to-r from-violet-950/90 to-cyan-950/70 border border-cyan-500/60 flex flex-col gap-2">
+                      <div className="p-3 rounded-xl bg-linear-to-r from-violet-950/90 to-cyan-950/70 border border-cyan-500/60 flex flex-col gap-2">
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-bold text-cyan-300 flex items-center gap-1.5">
                             <Mic className="w-3.5 h-3.5 text-cyan-400" />
