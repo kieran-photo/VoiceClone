@@ -1,23 +1,33 @@
 // netlify/functions/generate-audio.ts
+declare const process: {
+  env: {
+    [key: string]: string | undefined;
+    HF_ACCESS_TOKEN?: string;
+  };
+};
+
 export default async (req: Request) => {
   if (req.method !== "POST") {
     return new Response("Method Not Allowed", { status: 405 });
   }
 
-  const { lyrics } = await req.json();
-  const token = (globalThis as typeof globalThis & {
-    process?: { env?: Record<string, string | undefined> };
-  }).process?.env?.HF_ACCESS_TOKEN;
-
-  if (!token) {
-    return new Response("Missing HF_ACCESS_TOKEN", { status: 500 });
-  }
-
   try {
-    // 1. Neural Vocal Synthesis: converts lyrics into audible spoken/sung words
-    // facebook/mms-tts-eng converts raw lyrics into clean vocal audio
-    const textToVocalize = lyrics || "Electric signals pulse across the midnight floor";
+    const { lyrics } = await req.json();
+    const token = process.env.HF_ACCESS_TOKEN;
 
+    if (!token) {
+      return new Response("Missing HF_ACCESS_TOKEN environment variable in Netlify", {
+        status: 500,
+      });
+    }
+
+    // 1. Sanitize multiline lyrics into a clean spoken sentence for MMS-TTS
+    const cleanText = (lyrics || "Electric signals pulse across the floor")
+      .replace(/\n+/g, ". ")
+      .replace(/[^a-zA-Z0-9\s.,!?'"]/g, "")
+      .trim();
+
+    // 2. Query Hugging Face Neural Text-to-Speech (facebook/mms-tts-eng)
     const response = await fetch(
       "https://api-inference.huggingface.co/models/facebook/mms-tts-eng",
       {
@@ -27,21 +37,21 @@ export default async (req: Request) => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          inputs: textToVocalize,
-          options: { wait_for_model: true },
+          inputs: cleanText,
+          options: { wait: true },
         }),
       }
     );
 
     if (!response.ok) {
-      const errText = await response.text();
-      return new Response(errText, { status: response.status });
+      const err = await response.text();
+      return new Response(err, { status: response.status });
     }
 
-    const vocalAudioBytes = await response.arrayBuffer();
-    return new Response(vocalAudioBytes, {
+    const audioBytes = await response.arrayBuffer();
+    return new Response(new Uint8Array(audioBytes), {
       status: 200,
-      headers: { "Content-Type": "audio/flac" },
+      headers: { "Content-Type": "audio/wav" },
     });
   } catch (err: any) {
     return new Response(err.message, { status: 500 });
