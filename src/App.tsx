@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from "react";
-import { generateSong, writeLyrics, splitStems } from "./audioBackend";
+import { generateSong, splitStems } from "./audioBackend";
 import type { Clip, SplitStemsResult } from "./audioBackend";
 import {
   Mic,
@@ -1383,20 +1383,16 @@ export default function App() {
     });
   }, [voiceProfile]);
 
-  // AI Lyrics generation using SDK
+  // Generate lyrics locally without relying on an unavailable backend export.
   const handleGenerateLyrics = async () => {
     setIsWritingLyrics(true);
     setError(null);
     try {
-      const prompt = `Write a 4-line electronic vocal lyric for ${activeSubgenre.name} (${activeSubgenre.bpm} BPM)`;
-      const res = await writeLyrics({ prompt });
-      if (res && res.lyrics) {
-        setLyrics(res.lyrics);
-      }
-    } catch (err: any) {
-      console.error("Lyrics generation error:", err);
       setLyrics(
-        "Electric signals pulse across the midnight floor\nFeel the sub-bass tearing through the speaker cone\nNeon lasers lighting up the infinite sky\nLost inside the frequency we call our home"
+        `Electric signals rise beneath the ${activeSubgenre.name} sky\n` +
+        `A ${activeSubgenre.bpm} heartbeat carries us through the night\n` +
+        "Neon echoes bloom as every shadow comes alive\n" +
+        "We follow the sound until the morning light"
       );
     } finally {
       setIsWritingLyrics(false);

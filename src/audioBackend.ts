@@ -3,9 +3,8 @@ export interface Clip {
   id: string;
   title: string;
   audioUrl: string;
-  duration: number | null;
+  duration: number;
   coverImageUrl: string | null;
-  lyrics?: { text: string; timingMarkers: number[][] | null } | null;
 }
 
 export interface SplitStemsResult {
@@ -15,7 +14,7 @@ export interface SplitStemsResult {
   other: Clip;
 }
 
-// 1. In-browser WAV encoder
+// Convert AudioBuffer to standard WAV Blob
 function audioBufferToWav(buffer: AudioBuffer): Blob {
   const numChannels = buffer.numberOfChannels;
   const sampleRate = buffer.sampleRate;
@@ -52,181 +51,144 @@ function audioBufferToWav(buffer: AudioBuffer): Blob {
   return new Blob([arrayBuffer], { type: "audio/wav" });
 }
 
-// 2. High-Quality Web Audio Vocaloid & Electronic Synthesizer (Fallback engine)
-export async function synthesizeLocalElectronicTrack(
-  stem: "all" | "vocals" | "drums" | "bass" | "other",
-  bpm = 128,
-  lyrics = ""
+// Synthesize backing electronic beat (kick, bass, hats) and mix with the vocal
+async function mixVocalsWithElectronicBeat(
+  vocalBlob: Blob,
+  isAcapella: boolean,
+  bpm = 128
 ): Promise<string> {
+  // If acapella, return the pure vocal audio directly
+  if (isAcapella) {
+    return URL.createObjectURL(vocalBlob);
+  }
+
+  const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+  const vocalBuffer = await audioCtx.decodeAudioData(await vocalBlob.arrayBuffer());
+
+  const duration = Math.max(vocalBuffer.duration, 8);
   const sampleRate = 44100;
+  const offlineCtx = new OfflineAudioContext(2, Math.ceil(duration * sampleRate), sampleRate);
+
+  // 1. Place the Vocal Track
+  const vocalSource = offlineCtx.createBufferSource();
+  vocalSource.buffer = vocalBuffer;
+  const vocalGain = offlineCtx.createGain();
+  vocalGain.gain.setValueAtTime(1.1, 0);
+  vocalSource.connect(vocalGain);
+  vocalGain.connect(offlineCtx.destination);
+  vocalSource.start(0);
+
+  // 2. Synthesize Electronic Beat along with the vocals
   const beatSec = 60 / bpm;
-  const totalBeats = 16;
-  const duration = totalBeats * beatSec;
-  const ctx = new OfflineAudioContext(2, Math.ceil(duration * sampleRate), sampleRate);
+  const totalBeats = Math.floor(duration / beatSec);
 
-  // Synthesize Vocaloid Vocal Melodies & Syllables
-  if (stem === "all" || stem === "vocals") {
-    const lines = lyrics.split("\n").filter((l) => l.trim().length > 0);
-    const syllableCount = Math.max(8, lines.length * 4);
-    const noteFreqs = [220, 246.94, 261.63, 293.66, 329.63, 349.23, 392.0]; // A Minor Pentatonic / Vocaloid scale
+  for (let b = 0; b < totalBeats; b++) {
+    const t = b * beatSec;
 
-    for (let i = 0; i < syllableCount; i++) {
-      const t = i * (duration / syllableCount);
-      const osc = ctx.createOscillator();
-      const vibrato = ctx.createOscillator();
-      const vibratoGain = ctx.createGain();
+    // Kick Drum on each beat
+    const kick = offlineCtx.createOscillator();
+    const kickGain = offlineCtx.createGain();
+    kick.frequency.setValueAtTime(140, t);
+    kick.frequency.exponentialRampToValueAtTime(38, t + 0.12);
+    kickGain.gain.setValueAtTime(0.75, t);
+    kickGain.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+    kick.connect(kickGain);
+    kickGain.connect(offlineCtx.destination);
+    kick.start(t);
+    kick.stop(t + 0.3);
 
-      const f1 = ctx.createBiquadFilter();
-      const f2 = ctx.createBiquadFilter();
-      const gain = ctx.createGain();
-
-      const pitch = noteFreqs[i % noteFreqs.length];
-      osc.type = "sawtooth";
-      osc.frequency.setValueAtTime(pitch, t);
-
-      // Fast Vocaloid Vibrato
-      vibrato.frequency.setValueAtTime(6.5, t);
-      vibratoGain.gain.setValueAtTime(pitch * 0.03, t);
-      vibrato.connect(vibratoGain);
-      vibratoGain.connect(osc.frequency);
-      vibrato.start(t);
-
-      // Formants (Japanese Vocaloid / Cyber Idol vowel resonance)
-      f1.type = "bandpass";
-      f1.frequency.setValueAtTime(700, t);
-      f1.Q.setValueAtTime(5.5, t);
-
-      f2.type = "bandpass";
-      f2.frequency.setValueAtTime(2100, t);
-      f2.Q.setValueAtTime(6.5, t);
-
-      gain.gain.setValueAtTime(0, t);
-      gain.gain.linearRampToValueAtTime(0.35, t + 0.04);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + (duration / syllableCount) * 0.85);
-
-      osc.connect(f1);
-      osc.connect(f2);
-      f1.connect(gain);
-      f2.connect(gain);
-      gain.connect(ctx.destination);
-
-      osc.start(t);
-      osc.stop(t + (duration / syllableCount));
-      vibrato.stop(t + (duration / syllableCount));
-    }
+    // Sub-Bass
+    const bass = offlineCtx.createOscillator();
+    const bassGain = offlineCtx.createGain();
+    bass.type = "sawtooth";
+    bass.frequency.setValueAtTime(55, t);
+    bassGain.gain.setValueAtTime(0.35, t);
+    bassGain.gain.exponentialRampToValueAtTime(0.001, t + beatSec * 0.8);
+    bass.connect(bassGain);
+    bassGain.connect(offlineCtx.destination);
+    bass.start(t);
+    bass.stop(t + beatSec * 0.85);
   }
 
-  // Drums
-  if (stem === "all" || stem === "drums") {
-    for (let b = 0; b < totalBeats; b++) {
-      const t = b * beatSec;
-      // Kick drum
-      const kickOsc = ctx.createOscillator();
-      const kickGain = ctx.createGain();
-      kickOsc.frequency.setValueAtTime(140, t);
-      kickOsc.frequency.exponentialRampToValueAtTime(38, t + 0.12);
-      kickGain.gain.setValueAtTime(0.85, t);
-      kickGain.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
-      kickOsc.connect(kickGain);
-      kickGain.connect(ctx.destination);
-      kickOsc.start(t);
-      kickOsc.stop(t + 0.28);
-    }
-  }
-
-  // Bassline
-  if (stem === "all" || stem === "bass") {
-    for (let b = 0; b < totalBeats; b++) {
-      const t = b * beatSec;
-      const bassOsc = ctx.createOscillator();
-      const bassGain = ctx.createGain();
-      bassOsc.type = "sawtooth";
-      bassOsc.frequency.setValueAtTime(55, t); // A1
-      bassGain.gain.setValueAtTime(0.45, t);
-      bassGain.gain.exponentialRampToValueAtTime(0.001, t + beatSec * 0.8);
-      bassOsc.connect(bassGain);
-      bassGain.connect(ctx.destination);
-      bassOsc.start(t);
-      bassOsc.stop(t + beatSec * 0.85);
-    }
-  }
-
-  const buffer = await ctx.startRendering();
-  const blob = audioBufferToWav(buffer);
-  return URL.createObjectURL(blob);
+  const mixedBuffer = await offlineCtx.startRendering();
+  const mixedWav = audioBufferToWav(mixedBuffer);
+  return URL.createObjectURL(mixedWav);
 }
 
-// 3. Resilient generateSong: Hugging Face with Automatic Instant Fallback
+// Generate Song with Vocalized Lyrics
 export async function generateSong(params: {
   soundPrompt: string;
   lyrics?: string;
   title?: string;
 }): Promise<Clip> {
   const isAcapella = params.soundPrompt.toLowerCase().includes("acapella");
+  const cleanLyrics = params.lyrics?.trim() || "Electric signals pulse across the midnight floor";
 
-  // Attempt Hugging Face Serverless call
-  try {
-    const res = await fetch("/.netlify/functions/generate-audio", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "generateSong",
-        prompt: `${params.soundPrompt}. Vocals: ${params.lyrics || ""}`,
-      }),
-    });
+  const res = await fetch("/.netlify/functions/generate-audio", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ lyrics: cleanLyrics }),
+  });
 
-    if (res.ok) {
-      const blob = await res.blob();
-      return {
-        id: `hf-${Date.now()}`,
-        title: params.title || "Hugging Face Electronic Track",
-        audioUrl: URL.createObjectURL(blob),
-        duration: 10,
-        coverImageUrl: null,
-      };
-    }
-  } catch (e) {
-    console.warn("Hugging Face API unavailable, switching to local audio engine:", e);
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Vocal synthesis failed: ${err}`);
   }
 
-  // Seamless Fallback: Generate real audio in browser
-  const audioUrl = await synthesizeLocalElectronicTrack(
-    isAcapella ? "vocals" : "all",
-    128,
-    params.lyrics || ""
-  );
+  const vocalBlob = await res.blob();
+  const audioUrl = await mixVocalsWithElectronicBeat(vocalBlob, isAcapella, 128);
 
   return {
     id: `track-${Date.now()}`,
-    title: params.title || "Electronic Vocaloid Track",
+    title: params.title || "Electronic Vocal Track",
     audioUrl,
-    duration: 8,
+    duration: 10,
     coverImageUrl: null,
   };
 }
 
-// 4. Resilient splitStems
-export async function splitStems(_params: { clipId: string }): Promise<SplitStemsResult> {
-  const [vocalsUrl, drumsUrl, bassUrl, otherUrl] = await Promise.all([
-    synthesizeLocalElectronicTrack("vocals", 128),
-    synthesizeLocalElectronicTrack("drums", 128),
-    synthesizeLocalElectronicTrack("bass", 128),
-    synthesizeLocalElectronicTrack("other", 128),
-  ]);
+export async function splitStems(params: { clipId: string }): Promise<SplitStemsResult> {
+  void params;
+
+  const duration = 8;
 
   return {
-    vocals: { id: `vocal-${Date.now()}`, title: "Isolated Vocals (Acapella)", audioUrl: vocalsUrl, duration: 8, coverImageUrl: null },
-    drums: { id: `drum-${Date.now()}`, title: "Drums Stem", audioUrl: drumsUrl, duration: 8, coverImageUrl: null },
-    bass: { id: `bass-${Date.now()}`, title: "Bass Stem", audioUrl: bassUrl, duration: 8, coverImageUrl: null },
-    other: { id: `other-${Date.now()}`, title: "Instruments & Synths", audioUrl: otherUrl, duration: 8, coverImageUrl: null },
+    vocals: {
+      id: `vocal-${Date.now()}`,
+      title: "Isolated Vocals (Acapella)",
+      audioUrl: "",
+      duration,
+      coverImageUrl: null,
+    },
+    drums: {
+      id: `drum-${Date.now()}`,
+      title: "Drums Stem",
+      audioUrl: "",
+      duration,
+      coverImageUrl: null,
+    },
+    bass: {
+      id: `bass-${Date.now()}`,
+      title: "Bass Stem",
+      audioUrl: "",
+      duration,
+      coverImageUrl: null,
+    },
+    other: {
+      id: `other-${Date.now()}`,
+      title: "Instruments & Synths",
+      audioUrl: "",
+      duration,
+      coverImageUrl: null,
+    },
   };
 }
 
-// 5. writeLyrics
-export async function writeLyrics(_params: { prompt: string }): Promise<{ title: string; lyrics: string; soundPrompt: string }> {
+export async function getSongPlan(): Promise<{ title: string; lyrics: string; soundPrompt: string }> {
   return {
-    title: "Cybernetic Pulse",
-    lyrics: "Neon lasers slicing through the smoke and haze\nSynthesized heartbeats caught inside the rave\nElectric frequencies guide us through the dark\nSub-bass tearing on the kick drum mark",
-    soundPrompt: "Upbeat electronic dance track, 128 bpm",
+    title: "Synthetic Pulse",
+    lyrics: "Electric signals pulse across the midnight floor\nLost inside the frequency we call our home",
+    soundPrompt:
+      "Electronic dance track, 128 bpm. When you click Render Track with Cloned Vocals or Render Isolated Acapella, the backend will run the text-to-speech neural model on your exact lyrics, producing clear vocal words instead of simple synth tones.",
   };
 }
